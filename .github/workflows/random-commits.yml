@@ -1,0 +1,102 @@
+name: Random Commit Bot
+
+on:
+  schedule:
+    - cron: '0 * * * *'     # Every hour
+    - cron: '59 23 * * *'   # At 11:59 PM (send summary)
+  workflow_dispatch:
+
+jobs:
+
+  # Job 1: Random hourly commit
+  random-committer:
+    if: github.event.schedule == '0 * * * *'
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Setup daily files
+      run: |
+        TODAY=$(date +%Y-%m-%d)
+        [ -f .push_day.txt ] || echo "" > .push_day.txt
+        [ -f .push_target.txt ] || echo "0" > .push_target.txt
+        [ -f .push_count.txt ] || echo "0" > .push_count.txt
+
+        if [ "$(cat .push_day.txt)" != "$TODAY" ]; then
+          echo "$TODAY" > .push_day.txt
+          echo $((RANDOM % 21 + 10)) > .push_target.txt
+          echo 0 > .push_count.txt
+        fi
+
+    - name: Random decision to push
+      run: |
+        TARGET=$(cat .push_target.txt)
+        COUNT=$(cat .push_count.txt)
+        LEFT=$((TARGET - COUNT))
+        HOURS_LEFT=$((24 - $(date +%H)))
+
+        if [ "$LEFT" -le 0 ]; then
+          echo "Skip: All $TARGET commits done."
+          exit 0
+        fi
+
+        PROB=$(( (LEFT * 100) / HOURS_LEFT ))
+        ROLL=$(( RANDOM % 100 ))
+        if [ "$ROLL" -gt "$PROB" ]; then
+          echo "Skip this hour. ($ROLL > $PROB)"
+          exit 0
+        fi
+
+        # Modify log.txt
+        [ -f log.txt ] || echo "Log Start" > log.txt
+        ACTION=$((RANDOM % 2))
+        if [ "$ACTION" -eq 0 ]; then
+          echo "$(date) - Added log line" >> log.txt
+        else
+          LINES=$(wc -l < log.txt)
+          if [ "$LINES" -gt 10 ]; then
+            head -n -$((RANDOM % 5 + 1)) log.txt > temp && mv temp log.txt
+          fi
+        fi
+
+        echo $((COUNT + 1)) > .push_count.txt
+
+        MSGS=("Update log" "Minor edit" "Clean format" "Change log lines" "Log update" "Tweak details")
+        IDX=$(( RANDOM % ${#MSGS[@]} ))
+        COMMIT_MSG=${MSGS[$IDX]}
+
+        git config user.name "Random Bot"
+        git config user.email "bot@github.com"
+        git add log.txt .push_count.txt .push_target.txt .push_day.txt
+        git commit -m "$COMMIT_MSG" || echo "Nothing new"
+        git push
+
+  # Job 2: Daily summary at 11:59 PM
+  daily-summary:
+    if: github.event.schedule == '59 23 * * *'
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Read commit count
+      id: summary
+      run: |
+        COUNT=$(cat .push_count.txt 2>/dev/null || echo "0")
+        DAY=$(date +%d-%m-%Y)
+        echo "msg=📊 Summary for $DAY: $COUNT commits done by Random Bot." >> $GITHUB_OUTPUT
+
+    - name: Send summary email
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.EMAIL_USER }}
+        password: ${{ secrets.EMAIL_PASS }}
+        subject: "📬 Random Commit Summary"
+        body: ${{ steps.summary.outputs.msg }}
+        to: experimentpurpose1@gmail.com
+        from: Random Bot <bot@random.com>
